@@ -1,0 +1,235 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Core models for the marketplace
+
+model User {
+  id                    String   @id @default(cuid())
+  email                 String   @unique
+  username              String   @unique
+  password              String
+  name                  String?
+  twoFactorEnabled      Boolean  @default(false)
+  createdAt             DateTime @default(now())
+  ratingCount           Int      @default(0)
+  ratingTotal           Int      @default(0)
+  ratingAverage         Float?
+  stripeCustomerId      String?  @unique
+  sellerStripeAccountId String?
+
+  listings        Listing[]
+  messagesFrom    Message[]     @relation("MessagesFrom")
+  messagesTo      Message[]     @relation("MessagesTo")
+  offersBuyer     Offer[]       @relation("OffersBuyer")
+  offersSeller    Offer[]       @relation("OffersSeller")
+  purchases       Purchase[]    @relation("PurchasesBuyer")
+  sales           Sale[]        @relation("SalesSeller")
+  watchlist       Watchlist[]
+  savedSearches   SavedSearch[]
+  pushTokens      PushToken[]
+  ratingsGiven    Rating[]      @relation("RatingsGiven")
+  ratingsReceived Rating[]      @relation("RatingsReceived")
+  returnRequests  ReturnRequest[] @relation("ReturnRequestsBuyer")
+  listingReports  ListingReport[]
+  cartItems       CartItem[]
+}
+
+model Listing {
+  id           String   @id @default(cuid())
+  title        String
+  description  String?
+  price        Int
+  shippingCost Int?
+  mainImage    String?
+  images       String[] @default([])
+  condition    String?
+  category     String?
+  subcategory  String?
+  year         String?
+  make         String?
+  model        String?
+  camera       String?
+  zipCode      String?
+  localPickup  Boolean  @default(false)
+  allowOffers  Boolean  @default(true)
+  status       String   @default("active")
+  seller       User     @relation(fields: [sellerId], references: [id])
+  sellerId     String
+  createdAt    DateTime @default(now())
+  viewCount    Int      @default(0)
+  watchCount   Int      @default(0)
+  messageCount Int      @default(0)
+
+  messages      Message[]
+  offers        Offer[]
+  sales         Sale[]
+  purchases     Purchase[]
+  ratings       Rating[]
+  watchlistedBy Watchlist[]
+  reports       ListingReport[]
+  cartItems   CartItem[]
+}
+
+model Message {
+  id         String   @id @default(cuid())
+  listing    Listing  @relation(fields: [listingId], references: [id])
+  listingId  String
+  fromUser   User     @relation("MessagesFrom", fields: [fromUserId], references: [id])
+  fromUserId String
+  toUser     User     @relation("MessagesTo", fields: [toUserId], references: [id])
+  toUserId   String
+  body       String
+  createdAt  DateTime @default(now())
+}
+
+model Offer {
+  id        String   @id @default(cuid())
+  listing   Listing  @relation(fields: [listingId], references: [id])
+  listingId String
+  buyer     User     @relation("OffersBuyer", fields: [buyerId], references: [id])
+  buyerId   String
+  seller    User?    @relation("OffersSeller", fields: [sellerId], references: [id])
+  sellerId  String?
+  amount    Int
+  status    String   @default("pending") // pending | accepted | declined
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+}
+
+model Purchase {
+  id                   String    @id @default(cuid())
+  listing              Listing   @relation(fields: [listingId], references: [id])
+  listingId            String
+  buyer                User      @relation("PurchasesBuyer", fields: [buyerId], references: [id])
+  buyerId              String
+  amount               Int
+  appFeeAmount         Int
+  netAmount            Int
+  paymentIntentId      String?
+  paid                 Boolean   @default(false)
+  paidAt               DateTime?
+  paymentFailed        Boolean   @default(false)
+  paymentFailureReason String?
+  shipped              Boolean   @default(false)
+  trackingNumber       String?
+  carrier              String?
+  shippedAt            DateTime?
+  createdAt            DateTime  @default(now())
+
+  returnRequest ReturnRequest?
+}
+
+model Sale {
+  id                   String    @id @default(cuid())
+  listing              Listing   @relation(fields: [listingId], references: [id])
+  listingId            String
+  seller               User      @relation("SalesSeller", fields: [sellerId], references: [id])
+  sellerId             String
+  amount               Int
+  appFeeAmount         Int
+  netAmount            Int
+  paymentIntentId      String?
+  paid                 Boolean   @default(false)
+  paidAt               DateTime?
+  paymentFailed        Boolean   @default(false)
+  paymentFailureReason String?
+  shipped              Boolean   @default(false)
+  trackingNumber       String?
+  carrier              String?
+  shippedAt            DateTime?
+  createdAt            DateTime  @default(now())
+}
+
+model Watchlist {
+  id        String   @id @default(cuid())
+  user      User     @relation(fields: [userId], references: [id])
+  userId    String
+  listing   Listing  @relation(fields: [listingId], references: [id])
+  listingId String
+  createdAt DateTime @default(now())
+
+  @@unique([userId, listingId])
+}
+
+model SavedSearch {
+  id                   String    @id @default(cuid())
+  user                 User      @relation(fields: [userId], references: [id])
+  userId               String
+  name                 String?
+  query                String?
+  category             String?
+  subcategory          String?
+  minPrice             Int?
+  maxPrice             Int?
+  camera               String?
+  notify               Boolean   @default(false)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @default(now())
+  lastCheckedAt        DateTime?
+  lastListingCreatedAt DateTime?
+}
+
+model PushToken {
+  id            String   @id @default(cuid())
+  user          User     @relation(fields: [userId], references: [id])
+  userId        String
+  expoPushToken String   @unique
+  updatedAt     DateTime @default(now())
+}
+
+model ReturnRequest {
+  id         String   @id @default(cuid())
+  purchase   Purchase @relation(fields: [purchaseId], references: [id])
+  purchaseId String   @unique
+  buyer      User     @relation("ReturnRequestsBuyer", fields: [buyerId], references: [id])
+  buyerId    String
+  status     String   @default("pending") // pending | approved | rejected
+  reason     String?
+  buyerPaysReturnShipping Boolean @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model Rating {
+  id        String   @id @default(cuid())
+  listing   Listing  @relation(fields: [listingId], references: [id])
+  listingId String
+  seller    User     @relation("RatingsReceived", fields: [sellerId], references: [id])
+  sellerId  String
+  buyer     User     @relation("RatingsGiven", fields: [buyerId], references: [id])
+  buyerId   String
+  score     Int
+  comment   String?
+  createdAt DateTime @default(now())
+}
+
+model ListingReport {
+  id        String   @id @default(cuid())
+  listing   Listing  @relation(fields: [listingId], references: [id])
+  listingId String
+  reporter  User?    @relation(fields: [reporterId], references: [id])
+  reporterId String?
+  reason    String
+  note      String?
+  createdAt DateTime @default(now())
+}
+
+model CartItem {
+  id         String   @id @default(cuid())
+  user       User     @relation(fields: [userId], references: [id])
+  userId     String
+  listing    Listing  @relation(fields: [listingId], references: [id])
+  listingId  String
+  quantity   Int      @default(1)
+  createdAt  DateTime @default(now())
+
+  @@unique([userId, listingId])
+}

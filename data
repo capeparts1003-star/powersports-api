@@ -1,0 +1,440 @@
+// server.js
+// Simple in-memory API for your powersports app
+
+const express = require("express");
+const cors = require("cors");
+const { v4: uuidv4 } = require("uuid");
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+// ---- Simple "auth": current user ----
+// In a real app, you'd use JWT or sessions.
+// For now, we assume one demo user with id "user-1".
+function getCurrentUserId(req) {
+  return req.header("x-user-id") || "user-1";
+}
+
+// ---- In-memory data stores ----
+let users = [
+  {
+    id: "user-1",
+    name: "Demo User",
+  },
+];
+
+let categories = [
+  { id: "cat-atv", name: "ATV" },
+  { id: "cat-bike", name: "Motorcycle" },
+  { id: "cat-sxs", name: "Side by Side" },
+];
+
+let subcategories = [
+  { id: "sub-sportbike", categoryId: "cat-bike", name: "Sport Bike" },
+  { id: "sub-cruiser", categoryId: "cat-bike", name: "Cruiser" },
+  { id: "sub-utility-atv", categoryId: "cat-atv", name: "Utility ATV" },
+  { id: "sub-sport-atv", categoryId: "cat-atv", name: "Sport ATV" },
+  { id: "sub-4seat-sxs", categoryId: "cat-sxs", name: "4-Seat SxS" },
+  { id: "sub-2seat-sxs", categoryId: "cat-sxs", name: "2-Seat SxS" },
+];
+
+let listings = [
+  // Example starter listing
+  {
+    id: "listing-1",
+    title: "2020 Polaris RZR 1000",
+    description: "Clean machine, low hours, ready to ride.",
+    price: 1850000, // in cents ($18,500.00)
+    categoryId: "cat-sxs",
+    subcategoryId: "sub-4seat-sxs",
+    sellerId: "user-1",
+    status: "ACTIVE", // ACTIVE or SOLD
+    createdAt: new Date().toISOString(),
+    soldAt: null,
+    mainImage: null,
+    viewCount: 0,
+  },
+];
+
+let watches = [
+  // { id, userId, listingId, createdAt }
+];
+
+let messages = [
+  // { id, listingId, fromUserId, toUserId, body, createdAt }
+];
+
+// ---- Helpers ----
+function getListingById(id) {
+  return listings.find((l) => l.id === id);
+}
+
+function getListingWatchCount(listingId) {
+  return watches.filter((w) => w.listingId === listingId).length;
+}
+
+function getListingMessageCount(listingId) {
+  return messages.filter((m) => m.listingId === listingId).length;
+}
+
+// ---- Routes ----
+
+// Simple health check
+app.get("/health", (req, res) => {
+  res.json({ ok: true, time: new Date().toISOString() });
+});
+
+// ----- Categories & Subcategories -----
+
+// GET /categories
+app.get("/categories", (req, res) => {
+  res.json(categories);
+});
+
+// GET /subcategories?categoryId=cat-id
+app.get("/subcategories", (req, res) => {
+  const { categoryId } = req.query;
+  if (!categoryId) return res.json(subcategories);
+  res.json(subcategories.filter((s) => s.categoryId === categoryId));
+});
+
+// ----- Listings -----
+// GET /listings?categoryId=&subcategoryId=&q=
+app.get("/listings", (req, res) => {
+  const { categoryId, subcategoryId, q } = req.query;
+
+  let result = [...listings].filter((l) => l.status === "ACTIVE");
+
+  if (categoryId) {
+    result = result.filter((l) => l.categoryId === categoryId);
+  }
+  if (subcategoryId) {
+    result = result.filter((l) => l.subcategoryId === subcategoryId);
+  }
+  if (q) {
+    const query = String(q).toLowerCase();
+    result = result.filter(
+      (l) =>
+        l.title.toLowerCase().includes(query) ||
+        l.description.toLowerCase().includes(query)
+    );
+  }
+
+  // Add counts to each listing
+  const withCounts = result.map((l) => ({
+    ...l,
+    watchCount: getListingWatchCount(l.id),
+    messageCount: getListingMessageCount(l.id),
+  }));
+
+  res.json(withCounts);
+});
+
+// GET /listings/:id
+app.get("/listings/:id", (req, res) => {
+  const { id } = req.params;
+  const listing = getListingById(id);
+  if (!listing) {
+    return res.status(404).json({ error: "Listing not found" });
+  }
+
+  // Increment view count
+  listing.viewCount = (listing.viewCount || 0) + 1;
+
+  const watchCount = getListingWatchCount(id);
+  const messageCount = getListingMessageCount(id);
+
+  res.json({
+    ...listing,
+    watchCount,
+    messageCount,
+  });
+});
+
+// POST /listings  (create new listing from Sell screen)
+app.post("/listings", (req, res) => {
+  const userId = getCurrentUserId(req);
+  const {
+    title,
+    description = "",
+    price,
+    categoryId,
+    subcategoryId,
+    mainImage = null,
+  } = req.body;
+
+  if (!title || !price || !categoryId) {
+    return res
+      .status(400)
+      .json({ error: "title, price, and categoryId are required" });
+  }
+
+  const newListing = {
+    id: uuidv4(),
+    title,
+    description,
+    price: Number(price), // expect cents from app
+    categoryId,
+    subcategoryId: subcategoryId || null,
+    sellerId: userId,
+    status: "ACTIVE",
+    createdAt: new Date().toISOString(),
+    soldAt: null,
+    mainImage,
+    viewCount: 0,
+  };
+
+  listings.push(newListing);
+  res.status(201).json(newListing);
+});
+
+// PATCH /listings/:id  (edit listing)
+app.patch("/listings/:id", (req, res) => {
+  const userId = getCurrentUserId(req);
+  const { id } = req.params;
+  const listing = getListingById(id);
+
+  if (!listing) {
+    return res.status(404).json({ error: "Listing not found" });
+  }
+  if (listing.sellerId !== userId) {
+    return res.status(403).json({ error: "Not your listing" });
+  }
+
+  const {
+    title,
+    description,
+    price,
+    categoryId,
+    subcategoryId,
+    status,
+    mainImage,
+  } = req.body;
+
+  if (title !== undefined) listing.title = title;
+  if (description !== undefined) listing.description = description;
+  if (price !== undefined) listing.price = Number(price);
+  if (categoryId !== undefined) listing.categoryId = categoryId;
+  if (subcategoryId !== undefined) listing.subcategoryId = subcategoryId;
+  if (mainImage !== undefined) listing.mainImage = mainImage;
+
+  if (status === "SOLD" && listing.status !== "SOLD") {
+    listing.status = "SOLD";
+    listing.soldAt = new Date().toISOString();
+  } else if (status === "ACTIVE") {
+    listing.status = "ACTIVE";
+    listing.soldAt = null;
+  }
+
+  res.json(listing);
+});
+
+// POST /listings/:id/mark-sold
+app.post("/listings/:id/mark-sold", (req, res) => {
+  const userId = getCurrentUserId(req);
+  const { id } = req.params;
+  const listing = getListingById(id);
+
+  if (!listing) {
+    return res.status(404).json({ error: "Listing not found" });
+  }
+  if (listing.sellerId !== userId) {
+    return res.status(403).json({ error: "Not your listing" });
+  }
+
+  listing.status = "SOLD";
+  listing.soldAt = new Date().toISOString();
+
+  res.json(listing);
+});
+
+// ----- Watchlist (Favorites / Watching) -----
+// POST /listings/:id/watch   (add to watchlist)
+app.post("/listings/:id/watch", (req, res) => {
+  const userId = getCurrentUserId(req);
+  const { id: listingId } = req.params;
+
+  const listing = getListingById(listingId);
+  if (!listing) {
+    return res.status(404).json({ error: "Listing not found" });
+  }
+
+  const already = watches.find(
+    (w) => w.userId === userId && w.listingId === listingId
+  );
+  if (already) {
+    return res.json(already);
+  }
+
+  const watch = {
+    id: uuidv4(),
+    userId,
+    listingId,
+    createdAt: new Date().toISOString(),
+  };
+  watches.push(watch);
+  res.status(201).json(watch);
+});
+
+// DELETE /listings/:id/watch   (remove from watchlist)
+app.delete("/listings/:id/watch", (req, res) => {
+  const userId = getCurrentUserId(req);
+  const { id: listingId } = req.params;
+
+  const before = watches.length;
+  watches = watches.filter(
+    (w) => !(w.userId === userId && w.listingId === listingId)
+  );
+
+  if (watches.length === before) {
+    return res.status(404).json({ error: "Watch not found" });
+  }
+
+  res.json({ ok: true });
+});
+
+// GET /me/watched   (all listings current user is watching)
+app.get("/me/watched", (req, res) => {
+  const userId = getCurrentUserId(req);
+
+  const myWatches = watches.filter((w) => w.userId === userId);
+  const watchedListings = myWatches
+    .map((w) => getListingById(w.listingId))
+    .filter(Boolean)
+    .map((l) => ({
+      ...l,
+      watchCount: getListingWatchCount(l.id),
+      messageCount: getListingMessageCount(l.id),
+    }));
+
+  res.json(watchedListings);
+});
+
+// ----- Messages -----
+// GET /messages/:listingId
+app.get("/messages/:listingId", (req, res) => {
+  const userId = getCurrentUserId(req);
+  const { listingId } = req.params;
+
+  const listing = getListingById(listingId);
+  if (!listing) {
+    return res.status(404).json({ error: "Listing not found" });
+  }
+
+  const convo = messages
+    .filter((m) => m.listingId === listingId)
+    .sort(
+      (a, b) =>
+        new Date(a.createdAt).getTime() -
+        new Date(b.createdAt).getTime()
+    );
+
+  res.json({
+    listingId,
+    listingTitle: listing.title,
+    currentUserId: userId,
+    messages: convo,
+  });
+});
+
+// POST /messages/:listingId  { body, toUserId? }
+app.post("/messages/:listingId", (req, res) => {
+  const userId = getCurrentUserId(req);
+  const { listingId } = req.params;
+  const { body, toUserId } = req.body;
+
+  if (!body) return res.status(400).json({ error: "body is required" });
+
+  const listing = getListingById(listingId);
+  if (!listing) {
+    return res.status(404).json({ error: "Listing not found" });
+  }
+
+  const targetUserId = toUserId || listing.sellerId;
+
+  const msg = {
+    id: uuidv4(),
+    listingId,
+    fromUserId: userId,
+    toUserId: targetUserId,
+    body,
+    createdAt: new Date().toISOString(),
+  };
+
+  messages.push(msg);
+  res.status(201).json(msg);
+});
+
+// GET /me/messages   (all messages where current user is sender or receiver)
+app.get("/me/messages", (req, res) => {
+  const userId = getCurrentUserId(req);
+
+  const myMessages = messages.filter(
+    (m) => m.fromUserId === userId || m.toUserId === userId
+  );
+
+  res.json(myMessages);
+});
+
+// ----- My Garage (Seller Dashboard) -----
+// GET /me/garage
+app.get("/me/garage", (req, res) => {
+  const userId = getCurrentUserId(req);
+
+  const myListings = listings.filter((l) => l.sellerId === userId);
+
+  const now = new Date();
+  const days30Ago = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+  let totalRevenue = 0;
+  let last30DaysRevenue = 0;
+  let activeListings = 0;
+  let soldListings = 0;
+
+  const listingStats = myListings.map((listing) => {
+    const isSold = listing.status === "SOLD";
+    const soldPrice = isSold ? listing.price : 0;
+    const soldAt = listing.soldAt ? new Date(listing.soldAt) : null;
+
+    if (isSold) {
+      soldListings += 1;
+      totalRevenue += soldPrice;
+      if (soldAt && soldAt >= days30Ago) {
+        last30DaysRevenue += soldPrice;
+      }
+    } else {
+      activeListings += 1;
+    }
+
+    return {
+      id: listing.id,
+      title: listing.title,
+      price: listing.price,
+      status: listing.status,
+      createdAt: listing.createdAt,
+      soldAt: listing.soldAt,
+      mainImage: listing.mainImage,
+      viewCount: listing.viewCount || 0,
+      watchCount: getListingWatchCount(listing.id),
+      messageCount: getListingMessageCount(listing.id),
+    };
+  });
+
+  res.json({
+    totals: {
+      activeListings,
+      soldListings,
+      totalRevenue,
+      last30DaysRevenue,
+      totalListings: myListings.length,
+    },
+    listings: listingStats,
+  });
+});
+
+// ---- Start server ----
+const PORT = process.env.PORT || 4000;
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`API running on http://0.0.0.0:${PORT}`);
+});
